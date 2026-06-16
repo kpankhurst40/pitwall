@@ -1,0 +1,206 @@
+# read_usage.ps1 - Pitwall's real-usage reader (console-TEXT version, replaces OCR).
+# Spawns `claude /usage` HIDDEN, then reads the rendered panel straight out of the
+# console screen buffer as TEXT (Win32 ReadConsoleOutputCharacter) - the exact
+# characters the TUI drew, so there is NO OCR and no misread digits. Prints ONE
+# line of JSON to stdout:
+#   {"ok":true,"session_pct":17,"session_reset":"4:10pm","weekall_pct":75,
+#    "weekall_reset":"Jun 10, 5am","sonnet_pct":1,"raw":"<panel text>"}
+# or {"ok":false,"error":"..."} on failure. All diagnostics go to stderr.
+#
+# Runs under either PowerShell, but invoked via WinPS 5.1 for parity. $0 token cost.
+# SAFETY: only ever kills the claude.exe process tree WE spawned (seeded from our pid),
+#         never a sibling session a user may open during the ~10s capture. (Ivan HIGH)
+[CmdletBinding()]
+param(
+  [string]$ClaudeExe = "$env:USERPROFILE\.local\bin\claude.exe",
+  # The folder claude launches in MUST be one Claude Code already trusts, or the spawned
+  # session stalls on the "Do you trust this folder?" prompt and renders nothing. Empty
+  # => auto-pick a trusted+existing folder from ~/.claude.json (the /usage panel is
+  # account-level, so which trusted folder doesn't change the numbers).
+  [string]$WorkDir   = "",
+  [int]$MaxWaitSec   = 18,      # give the live /usage call time to render
+  [switch]$RawOnly,            # print just the captured panel text (no JSON) - for the troubleshooting view
+  [switch]$Trace              # emit per-step timing (hop + cumulative ms) to stderr
+)
+$ErrorActionPreference = 'Stop'
+function Fail([string]$m){ [Console]::Out.WriteLine((@{ok=$false;error=$m}|ConvertTo-Json -Compress)); exit 0 }
+trap { Fail ("unhandled: " + $_.Exception.Message) }
+
+# --- step timer (traceroute-style: each hop's own ms + cumulative) ---
+$script:sw = [System.Diagnostics.Stopwatch]::StartNew()
+$script:tprev = 0.0
+function Trace([string]$label){
+  if(-not $Trace){ return }
+  $now = $script:sw.Elapsed.TotalMilliseconds
+  $hop = $now - $script:tprev
+  $script:tprev = $now
+  [Console]::Error.WriteLine(("[trace] hop {0,7:N0}ms | total {1,7:N0}ms | {2}" -f $hop, $now, $label))
+}
+
+# --- find a trusted folder so /usage actually renders (see capture_usage.ps1 for the why) ---
+function Resolve-TrustedWorkDir {
+  $fallback = $env:USERPROFILE
+  try {
+    $cj = Join-Path $env:USERPROFILE '.claude.json'
+    if(-not (Test-Path $cj)){ return $fallback }
+    $key = $null
+    foreach($ln in (Get-Content $cj)){
+      $mk = [regex]::Match($ln, '^ {4}"(.+)":\s*\{\s*$')
+      if($mk.Success){ $key = $mk.Groups[1].Value; continue }
+      if($key -and $ln -match '^\s*"hasTrustDialogAccepted"\s*:\s*true'){
+        $p = $key -replace '\\\\','\'
+        if(Test-Path -LiteralPath $p){ return $p }
+        $key = $null
+      }
+    }
+  } catch {}
+  return $fallback
+}
+if(-not $WorkDir){ $WorkDir = Resolve-TrustedWorkDir }
+Trace "resolved trusted workdir"
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class PitwallCon {
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint pid);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern IntPtr CreateFileW(
+    string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetConsoleScreenBufferInfo(IntPtr h, out CSBI info);
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool ReadConsoleOutputCharacterW(
+    IntPtr h, StringBuilder buf, uint len, uint coord, out uint read);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
+  [StructLayout(LayoutKind.Sequential)] public struct COORD { public short X, Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct SMALL_RECT { public short L, T, R, B; }
+  [StructLayout(LayoutKind.Sequential)] public struct CSBI {
+    public COORD Size; public COORD Cursor; public ushort Attr; public SMALL_RECT Win; public COORD MaxWin; }
+}
+"@
+$GENERIC_RW = [uint32]3221225472   # 0xC0000000 GENERIC_READ|GENERIC_WRITE
+$SHARE_RW   = [uint32]3            # FILE_SHARE_READ|WRITE
+$OPEN_EXIST = [uint32]3            # OPEN_EXISTING
+
+function Read-ConsoleText([int]$targetPid) {
+  [PitwallCon]::FreeConsole() | Out-Null
+  if (-not [PitwallCon]::AttachConsole([uint32]$targetPid)) { return $null }
+  try {
+    $h = [PitwallCon]::CreateFileW("CONOUT$", $GENERIC_RW, $SHARE_RW, [IntPtr]::Zero, $OPEN_EXIST, 0, [IntPtr]::Zero)
+    if ($h -eq [IntPtr]-1 -or $h -eq [IntPtr]::Zero) { return $null }
+    try {   # close the CONOUT$ handle even if a read throws (Ivan LOW-2)
+      $info = New-Object PitwallCon+CSBI
+      if (-not [PitwallCon]::GetConsoleScreenBufferInfo($h, [ref]$info)) { return $null }
+      $w = $info.Size.X
+      $rows = New-Object System.Collections.Generic.List[string]
+      for ($y = $info.Win.T; $y -le $info.Win.B; $y++) {
+        $sb = New-Object System.Text.StringBuilder ($w + 1)
+        $read = 0
+        [PitwallCon]::ReadConsoleOutputCharacterW($h, $sb, [uint32]$w, ([uint32]$y -shl 16), [ref]$read) | Out-Null
+        $rows.Add($sb.ToString().TrimEnd())
+      }
+      return ($rows -join "`n")
+    } finally {
+      [PitwallCon]::CloseHandle($h) | Out-Null
+    }
+  } finally {
+    [PitwallCon]::FreeConsole() | Out-Null
+    [PitwallCon]::AttachConsole([uint32]4294967295) | Out-Null   # ATTACH_PARENT_PROCESS
+  }
+}
+
+function Get-Tree([int]$root) {
+  $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
+  $set = New-Object System.Collections.Generic.HashSet[int]
+  [void]$set.Add($root)
+  for ($i=0; $i -lt 6; $i++) {
+    $add = $false
+    foreach ($p in $all) {
+      if ($set.Contains([int]$p.ParentProcessId) -and -not $set.Contains([int]$p.ProcessId)) { [void]$set.Add([int]$p.ProcessId); $add=$true } }
+    if (-not $add) { break }
+  }
+  $set
+}
+
+if(-not (Test-Path $ClaudeExe)){ Fail "claude.exe not found at $ClaudeExe" }
+$proc = Start-Process -FilePath $ClaudeExe -ArgumentList '/usage' -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
+$ourTree = New-Object System.Collections.Generic.HashSet[int]; [void]$ourTree.Add([int]$proc.Id)
+Trace "spawned claude /usage (pid $($proc.Id))"
+
+function Kill-Ours {
+  try { foreach($k in @(Get-Tree ([int]$proc.Id))){ [void]$ourTree.Add($k) } } catch {}
+  foreach($k in @($ourTree)){ try { Stop-Process -Id $k -Force -ErrorAction Stop } catch {} }
+}
+
+# poll the console buffer until the panel shows "% used" (the live call has rendered).
+# No fixed blind wait — we read from the start, so a fast render finishes early.
+$text = $null
+$firstReadable = $false
+$deadline = (Get-Date).AddSeconds($MaxWaitSec)
+Start-Sleep -Milliseconds 500          # the console host needs a beat to exist at all
+while ((Get-Date) -lt $deadline) {
+  $tree = Get-Tree ([int]$proc.Id); foreach($k in $tree){ [void]$ourTree.Add($k) }
+  foreach ($tp in $tree) {
+    $t = Read-ConsoleText $tp
+    if ($t) {
+      if (-not $firstReadable) { $firstReadable = $true; Trace "console first readable" }
+      # require BOTH a percent AND a Resets line: the panel draws fast enough that a
+      # 500ms poll could otherwise catch a frame with the % but not yet the reset row.
+      if ($t -match '%\s*used' -and $t -match 'Resets') { $text = $t; break }
+    }
+  }
+  if ($text) { break }
+  Start-Sleep -Milliseconds 500
+}
+Trace "panel rendered (% used seen)"
+Kill-Ours
+Trace "killed our process tree"
+if (-not $text) { Fail "panel did not render (no '% used' text read)" }
+
+if ($RawOnly) { [Console]::Out.WriteLine($text); exit 0 }
+
+# --- parse the clean text: per section, the first "NN% used" and "Resets <time> (tz)" ---
+$session_pct=$null; $session_reset=$null; $weekall_pct=$null; $weekall_reset=$null; $sonnet_pct=$null
+$sec=''
+foreach ($ln in ($text -split "`n")) {
+  if     ($ln -match 'Current session')        { $sec='s'; continue }
+  elseif ($ln -match 'all models')             { $sec='w'; continue }
+  elseif ($ln -match 'Sonnet only')            { $sec='o'; continue }
+  elseif ($ln -match "contributing|Last 24h")  { $sec=''  }
+  if (-not $sec) { continue }
+  if ($ln -match '(\d{1,3})\s*%\s*used') {
+    $v=[int]$matches[1]
+    if ($v -ge 0 -and $v -le 100) {
+      if     ($sec -eq 's' -and $null -eq $session_pct) { $session_pct=$v }
+      elseif ($sec -eq 'w' -and $null -eq $weekall_pct) { $weekall_pct=$v }
+      elseif ($sec -eq 'o' -and $null -eq $sonnet_pct)  { $sonnet_pct=$v }
+    }
+  }
+  if ($ln -match 'Resets\s+(.+?)\s*\(') {
+    $rs=$matches[1].Trim()
+    if     ($sec -eq 's' -and -not $session_reset) { $session_reset=$rs }
+    elseif ($sec -eq 'w' -and -not $weekall_reset) { $weekall_reset=$rs }
+  }
+}
+
+if ($null -eq $session_pct -and $null -eq $weekall_pct -and $null -eq $sonnet_pct) {
+  Fail "no percentages parsed from panel"
+}
+# Reduce the raw panel to ASCII before it goes in the JSON: the bar/box glyphs and the
+# stray console control chars carry no info (the numbers + reset text are all ASCII), and
+# keeping them makes the JSON line fragile across the PowerShell->Python decode. Block
+# elements -> '#' so the bars still read as bars; everything else non-printable -> space.
+$rawAscii = -join ([char[]]$text | ForEach-Object {
+  $code = [int][char]$_
+  if     ($_ -eq "`n")                  { "`n" }
+  elseif ($code -ge 32 -and $code -le 126) { [string]$_ }
+  elseif ($code -ge 0x2580 -and $code -le 0x259F) { '#' }
+  else   { ' ' }
+})
+Trace "parsed numbers (session=$session_pct weekall=$weekall_pct sonnet=$sonnet_pct)"
+$out = [ordered]@{
+  ok=$true; session_pct=$session_pct; session_reset=$session_reset;
+  weekall_pct=$weekall_pct; weekall_reset=$weekall_reset; sonnet_pct=$sonnet_pct; raw=$rawAscii
+}
+[Console]::Out.WriteLine(($out | ConvertTo-Json -Compress))
+Trace "emitted JSON (DONE)"

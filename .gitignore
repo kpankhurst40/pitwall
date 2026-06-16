@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.pyc
+
+# Per-machine runtime state (window position/size, plan, pinned reset, the last
+# numbers you synced from Settings -> Usage). Pitwall recreates this from DEFAULTS in
+# ts_core.py on first run — it is intentionally NOT shared. (The token_steward_*
+# names are the pre-Pitwall files, still ignored so an unmigrated dev box stays clean.)
+pitwall_config.json
+token_steward_config.json
+
+# Per-machine drift log — what the widget guessed vs what you synced from
+# Settings -> Usage. Personal usage data, recreated locally; NOT shared.
+pitwall_corrections.jsonl
+token_steward_corrections.jsonl
+
+# Internal working notes (overnight reviews, standups) — not for the public repo.
+docs/standup/
+
+# Internal docs moved to the private pitwall-internal repo (K6, 2026-06-13): the
+# Claude↔Codex coordination log, the security review log, and the bake-off salvage.
+# Ignored here so they can't be re-tracked into the public tree.
+TEAM_NOTES.md
+docs/plans/security-review-log.md
+docs/apple-redesign-salvage/
+# Moved to pitwall-internal 2026-06-14 (pre-public team review): the internal design
+# log, the CLI-alignment engineering note, and the dated security reviews — all
+# internal-facing, not user docs.
+DESIGN_NOTES.md
+docs/token-metrics-and-cli-alignment.md
+docs/security/
+
+# "Let it ride" / autonomous-mode design, security & marketing — NOT for the public
+# repo (lives in the private pitwall-internal repo). Belt-and-suspenders: also covered
+# once moved under pitwall-internal/.
+pitwall-internal/
+docs/let-it-ride-*
+docs/security/let-it-ride-*
+docs/marketing/
+docs/plans/let-it-ride-*
+docs/plans/real-usage-auto-sync-investigation.md
+
+# POC / spike / dev-verification scratch — not product code
+poc/
+
+# Build/packaging pipeline — kept LOCAL only (decision 2026-06-14). Pitwall ships
+# free + source-only (no .exe), and the release checklist carries internal process
+# detail (decision codes, model-routing tags, owner name), so the whole build/ tree
+# stays out of the public repo.
+build/
+
+# Bug-repro screen recordings + extracted frames / debug screenshots (not product).
+# Underscore-prefixed docs paths are throwaway captures by convention.
+*.mp4
+docs/_*
+docs/paint-test/
+
+# Internal orientation files for the AI team (name the codename + local paths) —
+# they live on disk for sessions but never ship to the public repo.
+CLAUDE.md
+AGENTS.md
+
+# Worker-dispatch artifacts (model-routing system) — internal task/report traffic.
+worker_tasks_*.md
+worker_report_*.md
+
+# Local dev scratch: GUI-driver helpers, verification screenshots, spike pocs.
+# All throwaway — not product code.
+tools/
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/
+
+# Claude Code machine-local permission allowlist - never commit.
+.claude/settings.local.json
+
+# design-skill context (internal, never ships public)
+PRODUCT.md
+DESIGN.md
