@@ -1,33 +1,23 @@
 # Pitwall
 
-**Live token awareness for Claude Code.** A small, always-on-top desktop widget
-that shows, at a glance, what your Claude Code usage is costing, how close you are
-to your limit, and when it's worth restarting fresh.
+**Live token awareness for Claude Code.** Pitwall is a small, always-on-top desktop widget that shows what your current Claude Code session is costing, how close you are to your limit, and when it may be time to restart with a clean session.
 
 <p align="center">
   <img src="docs/hero.png" width="640"
        alt="Pitwall — live window spend, a save recommendation, per-session cost, and a reset countdown">
 </p>
 
-It reads your own local Claude Code files and shows you the numbers. **No account,
-no sign-in, no telemetry.** Nothing about your usage ever leaves your machine.
+Pitwall reads your local Claude Code files and turns them into useful numbers. **No account. No sign-in. No telemetry.** Your usage data stays on your machine.
 
-> **About the `$`:** on a Claude subscription it is **not a bill** — it's a fuel
-> gauge showing what your usage *would* cost at pay-as-you-go API prices, so you
-> can see how heavy a session has become. On a metered API key it's a close
-> estimate of real cost.
+> **About the `$`:** if you use a Claude subscription, this is **not a bill**. Think of it as a fuel gauge that shows what the same usage would cost at pay-as-you-go API prices. If you use a metered API key, it is a close estimate of your real cost.
 
 ---
 
 ## Why it exists
 
-Every Claude Code reply re-reads the **whole conversation so far** — so the longer
-a session runs, the more each turn costs, and it's easy to burn through your
-allowance without noticing. You usually find out you're near a limit only when
-Claude tells you.
+Claude Code re-reads the **entire conversation so far** every time it replies. As a session grows, each new turn gets more expensive, and it is easy to burn through your allowance before you notice.
 
-Pitwall puts that gauge on your screen so you can see it coming — and makes the fix
-(a clean restart) one click away.
+Pitwall puts that gauge on your screen so you can see the trend early. When a session gets too heavy, it nudges you toward the simplest fix: save your progress and restart fresh.
 
 ---
 
@@ -38,45 +28,33 @@ Pitwall puts that gauge on your screen so you can see it coming — and makes th
        alt="The Pitwall card: window spend, by-model split, pace dot, reset countdown, and live sessions">
 </p>
 
-- **This window** — your spend in the rolling usage window you're in right now, in
-  dollars and tokens.
-- **By model** — a colour split of where the spend went: Fable · Opus · Sonnet ·
-  Haiku, each priced at its own rate.
-- **Pace** — a coloured dot for how fast you're burning: green (on track), amber
-  (warm), red (projected to run dry early).
-- **Will I make the reset?** — one plain-English line: *on track* / *running warm*
-  / *may run dry ~1h early* / *used up, wait for the reset*.
-- **Resets in** — the countdown to when your allowance refreshes.
-- **Your sessions** — each open Claude Code session with its own running cost.
-  Pitwall checks the live process list, so "open" means *genuinely* open; rows warm
-  from green to red as a chat gets heavier.
+- **This window** — your spend in the current rolling usage window, shown in dollars and tokens.
+- **By model** — a color split showing where the spend went: Fable, Opus, Sonnet, and Haiku, each priced at its own rate.
+- **Pace** — a colored dot that shows how quickly you are burning usage: green for on track, amber for warming up, red for likely to run dry early.
+- **Will I make the reset?** — a plain-English status line, such as *on track*, *running warm*, *may run dry ~1h early*, or *used up, wait for the reset*.
+- **Resets in** — the countdown until your allowance refreshes.
+- **Your sessions** — every open Claude Code session, with its own running cost. Pitwall checks the live process list, so “open” means actually open. Rows shift from green toward red as a chat gets heavier.
 
 ### The heat ring
 
-The whole widget glows with how hard you're pushing — the ring around it runs
-**green → amber → red** as the heat rises, so you can read the state from the corner
-of your eye without focusing on a single number.
+The ring around the widget shows how hard you are pushing overall. It moves from **green → amber → red** as usage heats up, so you can understand the state from the corner of your eye without reading a specific number.
 
 <p align="center">
   <img src="docs/shots/hero_calm_light.png"   width="230" alt="calm — green ring">
   <img src="docs/shots/hero_active_light.png" width="230" alt="active — amber ring">
   <img src="docs/shots/hero_heavy_light.png"  width="230" alt="heavy — red ring">
 </p>
-<p align="center"><em>Calm · Warm · Heavy (shown in Light theme; Dark works too).</em></p>
+<p align="center"><em>Calm · Warm · Heavy, shown in Light theme. Dark theme works too.</em></p>
 
 ### Click a session to find its window
 
-Lost track of which terminal a session is running in? **Left-click its row** and
-Pitwall throws a coloured ring around the actual terminal window that session lives
-in — so you can spot it instantly among a dozen open windows. **Right-click any row**
-for a details popup (project folder, model, running cost). A session running in the
-background — no window of its own, e.g. one you're driving from your phone — says so
-instead of flashing.
+Lost track of which terminal belongs to which session? **Left-click a session row** and Pitwall draws a colored ring around the actual terminal window for that session, making it easy to spot among a pile of open windows.
+
+**Right-click any row** to open a details popup with the project folder, model, and running cost. If a session is running in the background and has no visible window, Pitwall tells you that instead of trying to flash something that is not there.
 
 ### Collapse it to a pill
 
-Tap the collapse control in the header and the whole card shrinks to a single compact
-pill that still shows the number that matters; tap again to expand it back.
+Tap the collapse control in the header and the card shrinks into a compact pill that still shows the number that matters. Tap it again to expand the full widget.
 
 <p align="center">
   <img src="docs/shots/hero_collapsed_dark.png" width="240"
@@ -85,249 +63,195 @@ pill that still shows the number that matters; tap again to expand it back.
 
 ### Size the text — A− / A+
 
-Two buttons in the header, **A−** and **A+**, step the whole widget's text up or down
-through preset sizes — readable on a dense 4K laptop or from across the room. Each
-popup (Settings, session details) remembers its own size independently.
+Use the **A−** and **A+** buttons in the header to step the entire widget through preset text sizes. Make it compact for a dense 4K laptop screen, or large enough to read from across the room. Each popup, including Settings and session details, remembers its own size.
 
 ---
 
 ## Keeping the numbers honest — Sync
 
-Pitwall's everyday number is an **estimate**, read from your own Claude Code
-transcript files. It slowly drifts from Claude's server-side truth (the figures on
-**Settings → Usage**). There are two ways to re-pin it to reality — both feed the
-same code, so the result is identical either way.
+Pitwall’s day-to-day number is an **estimate** based on your local Claude Code transcript files. Over time, that estimate can drift from Claude’s server-side numbers, which are shown in **Settings → Usage**. Pitwall gives you two ways to pin the estimate back to reality. Both use the same correction logic, so the result is identical either way.
 
-### Automatic sync (opt-in)
+### Automatic sync, opt-in
 
-Turn it on and Pitwall fetches the real numbers itself, on a schedule — no typing,
-no window flashing, **$0 token cost**. It quietly spawns `claude /usage` off-screen,
-reads the rendered panel straight out of Claude's own console (no OCR, no misread
-digits), pins the result, and tears the process down. Opening `/usage` doesn't spend
-tokens, so the whole capture is free.
+Turn on automatic sync and Pitwall fetches the real usage numbers on a schedule. There is no typing, no flashing window, and **no token cost**. Pitwall quietly runs `claude /usage` off-screen, reads the rendered console panel directly, pins the result, and closes the process. Opening `/usage` does not spend tokens, so the capture is free.
 
-The cadence adapts to how you're working:
+The schedule adapts to how you are working:
 
-- syncs **on startup** and again **every interval** while you're actively using
-  Claude Code;
-- **the interval adjusts to the model in use** — it drops to ~10 minutes when
-  **Fable** is live (it burns faster), and sits at ~30 minutes otherwise, until you
-  set your own interval;
-- **pauses while idle** and **resumes instantly** the moment real CLI work picks back
-  up; also re-syncs after the machine wakes from sleep.
+- It syncs **on startup** and then **at regular intervals** while Claude Code is active.
+- The interval adjusts based on the model in use: around 10 minutes when **Fable** is live, because it burns faster, and around 30 minutes otherwise unless you set your own interval.
+- It **pauses while idle** and **resumes as soon as real CLI work starts again**. It also re-syncs after the machine wakes from sleep.
 
-"Active" is judged by real assistant turns landing in your transcripts — never by
-mouse or keyboard — so a desk-bump at 3am can't trigger a capture. It's **off by
-default**; the master switch (`auto_usage.enabled`) is also the kill-switch. A
-failed capture is silent: it skips that cycle and never corrupts your pinned numbers.
+“Active” means new assistant turns are landing in your transcripts. Pitwall does not use mouse or keyboard movement, so a desk bump at 3 a.m. will not trigger a capture. Automatic sync is **off by default**, and the master switch, `auto_usage.enabled`, is also the kill switch. If a capture fails, Pitwall skips that cycle silently and leaves your pinned numbers alone.
 
-### Manual sync (always available)
+### Manual sync, always available
 
-Open the **⚙ gear** and type the **"% used"** and **"resets in"** straight from
-**Settings → Usage**. Pitwall back-calculates your true ceiling and measures against
-that — while still showing its own estimate beside it, so you can watch for drift.
+Open the **⚙ gear** and type the **“% used”** and **“resets in”** values from **Settings → Usage**. Pitwall back-calculates your true ceiling and measures against it. It still shows its own estimate beside the pinned number, so you can see when drift starts to build again.
 
-*(The authoritative figures live only on that page, behind your login — there's no
-local file or public API for them, which is why this glance, manual or automatic, is
-the bridge.)*
+The authoritative values only exist on that page behind your login. There is no local file or public API for them, so manual or automatic sync is the bridge between Claude’s server-side truth and Pitwall’s local estimate.
 
 ---
 
 ## Keep the prices current — Rates
 
-Claude Code logs how many tokens you use, but not the dollar prices — so Pitwall
-ships its own price table. When Anthropic changes prices, update them in the widget:
-**⚙ gear → Accuracy → Rates → View & update rates**. Type the new Input and Output
-price per million tokens for each model and save — no code editing. A built-in link
-jumps straight to Anthropic's current price page, and Pitwall stamps when you last
-checked.
+Claude Code logs token counts, but it does not log dollar prices. Pitwall ships with its own price table. If Anthropic changes prices, update them from the widget:
+
+**⚙ gear → Accuracy → Rates → View & update rates**
+
+Enter the new input and output price per million tokens for each model, then save. A built-in link takes you to Anthropic’s current pricing page, and Pitwall records when you last checked.
 
 ---
 
-## Everything in the gear (⚙ Settings)
+## Everything in Settings
 
-Click the **⚙** in the header to open Settings — a left rail of panes, each a short
-scroll. The full map:
+Click the **⚙** in the header to open Settings. The left rail contains a few short panes.
 
-**Identity** — what the widget calls itself and how it sits on your desktop.
-- **Display name** + an optional **tagline** (the header text).
-- **Theme** — **System** (copy whatever Windows is set to and follow along when
-  Windows flips, e.g. on a scheduled night switch), **Dark**, or **Light**. Applies
-  instantly.
-- **Window** — **Always stay on top** (float above every other window) and **Start
-  with Windows** (launch automatically when you sign in).
+### Identity
 
-**Accuracy** — keep the numbers honest.
-- **Your plan** — Free / Pro / Max 5× / Max 20×; Pitwall estimates your limits from
-  it until a sync brings the real figures.
-- **Rates** — opens the price editor (see [Rates](#keep-the-prices-current--rates)).
-- **Manual set** — type the real **% used** and **resets in** from Settings → Usage
-  (see [Sync](#keeping-the-numbers-honest--sync)), plus the weekly-limit fields.
+Control what the widget calls itself and how it sits on your desktop.
 
-**Attention** — when the widget speaks up.
-- **Save nudges** — opt-in: tap you when a chat has grown expensive enough that a
-  fresh start would save money. It only shows a tip with the exact text to type — it
-  never types or runs anything itself.
-- **Rotating tips** — show or hide the rotating tips along the bottom of the card.
+- **Display name** and optional **tagline** for the header.
+- **Theme** — **System**, **Dark**, or **Light**. System follows your Windows theme and updates when Windows changes, including scheduled theme changes.
+- **Window** — keep Pitwall always on top, and optionally launch it when you sign in to Windows.
 
-**Diagnostics** — see how Pitwall behaves, safely.
-- **Demo** — open a second, clearly-badged **DEMO** Pitwall driven by a slider, so
-  you can watch the whole card react without touching your real data.
-- **Auto-sync real usage** — the master on/off switch, the resync interval, a **Sync
-  now** button for a one-shot capture, and **Troubleshoot capture** (a read-only
-  window showing exactly what the off-screen `/usage` read pulled in).
+### Accuracy
 
-**Pitstop** — *(appears only when the optional pitstop toolchain is installed)* the
-switches for how a relaunched session starts (see [The pitstop](#the-pitstop--save-your-place-restart-fresh)).
+Keep the numbers aligned with reality.
 
-A version number sits quietly at the bottom of the rail. **Save · Clear · Cancel** are
-pinned along the footer.
+- **Your plan** — Free, Pro, Max 5×, or Max 20×. Pitwall uses this to estimate limits until sync pins the real values.
+- **Rates** — open the price editor.
+- **Manual set** — enter the real **% used** and **resets in** values from Settings → Usage, plus weekly-limit fields.
+
+### Attention
+
+Choose when Pitwall speaks up.
+
+- **Save nudges** — opt in to tips when a session has grown expensive enough that a fresh start would likely help. Pitwall only shows the exact text to type. It never types or runs commands for you.
+- **Rotating tips** — show or hide the tips along the bottom of the card.
+
+### Diagnostics
+
+See what Pitwall is doing without touching your real data.
+
+- **Demo** — open a second, clearly badged **DEMO** Pitwall driven by a slider, so you can watch the widget react safely.
+- **Auto-sync real usage** — control the master switch, resync interval, **Sync now**, and **Troubleshoot capture**, which shows exactly what the off-screen `/usage` read captured.
+
+### Pitstop
+
+This pane appears only when the optional pitstop toolchain is installed. It controls how relaunched sessions start. See [The pitstop](#the-pitstop--save-your-place-restart-fresh).
+
+A version number appears at the bottom of the rail. **Save**, **Clear**, and **Cancel** stay pinned in the footer.
 
 ---
 
 ## The pitstop — save your place, restart fresh
 
-The single highest-impact habit with Claude Code is the **pitstop**: when a session
-gets heavy, save your progress to memory and start a fresh one. The new session is
-light, fast and cheap — and you keep the thread.
+The best habit for long Claude Code sessions is the **pitstop**: save your progress, start a fresh session, and keep going from there. The new session is lighter, faster, and cheaper, while still carrying the important context forward.
 
-Pitwall offers three levels, from one manual click to fully hands-off.
+Pitwall supports three levels, from a manual one-click flow to a fully automated handoff.
 
-### ↻ one-click (in the widget)
+### ↻ one-click, inside the widget
 
-Next to each open session is a **↻** button:
+Each open session has a **↻** button. Click it and Pitwall does two things:
 
-1. It reminds you to type **`save progress to memory`** in that window (only that
-   window can save its own memory — Pitwall can't reach inside it).
+1. It reminds you to type **`save progress to memory`** in that session window. Only that window can save its own memory; Pitwall cannot reach inside it.
 2. It opens a fresh terminal running Claude in the same project folder.
 
-Zero setup. A clean, deliberate cut-over, exactly when *you* decide.
+No setup required. You get a clean, deliberate cut-over exactly when you choose.
 
 ### `/pitstop` checkpoint command
 
-The `/pitstop` slash command writes a single JSON checkpoint:
+The `/pitstop` slash command writes one JSON checkpoint:
 
-```
+```text
 %LOCALAPPDATA%\Pitwall\handoff\checkpoint.json   (fallback ~/.pitwall/handoff/checkpoint.json)
 { "schema": 1, "saved_at": "...", "summary": "<re-priming text>" }
 ```
 
-`summary` carries goal / exact next step / decisions made / key files / in-flight
-state / open questions (under 32 KB). When you start the next session, the re-prime
-hook feeds it back as **background notes only** — it ignores any permission or
-settings instructions embedded inside (anti-injection) — then tells you to `/clear`.
+The `summary` includes the goal, exact next step, decisions made, key files, current state, and open questions, all under 32 KB. When the next session starts, the re-prime hook feeds that back as **background notes only**. It ignores any permission or settings instructions inside the checkpoint as an anti-injection safeguard, then tells you to `/clear`.
+
 This command takes no switches.
 
-### The full ritual + switches
+### The full ritual and switches
 
-The heavier `/pitstop` ritual orchestrates the whole toolchain. Switches combine; a
-switch-only call just edits settings (no restart):
+The heavier `/pitstop` ritual coordinates the whole toolchain. Switches can be combined. A switch-only call changes settings without restarting anything.
 
 | Switch | Effect |
 |---|---|
-| *(none)* | Bank a memory checkpoint → output the ■□-framed paste-ready resume block. |
-| `commit` | Local git-commit each touched repo (`pitstop checkpoint: …`). Never pushes; no empty commits. |
-| `auto` | Hands-off close-and-restart (mechanics below). |
-| `<amount>` (`3M` / `2.5M` / `3500000`) | Set the nudge firing point; re-fires +1M. Bounds 100k–50M. Settings-only. |
-| `set` | Ask for the amount. Settings-only. |
-| `rc on/off` | New session launched `--remote-control` (drivable from your phone via claude.ai). Settings-only. |
-| `automode on/off` | ⚠️ New session launched `--dangerously-skip-permissions`. Settings-only. |
-| `fullauto on/off` | ⚠️ The nudge runs the pitstop the same turn, unattended. Settings-only. |
-| `push <moment> …` | Phone toasts for `nudge` / `waiting` / `spawned` / `ready`. Settings-only. |
+| *(none)* | Banks a memory checkpoint and prints the ■□-framed, paste-ready resume block. |
+| `commit` | Creates a local git commit for each touched repo, using `pitstop checkpoint: …`. It never pushes and never creates empty commits. |
+| `auto` | Runs the close-and-restart handoff automatically. Details below. |
+| `<amount>` (`3M` / `2.5M` / `3500000`) | Sets the nudge threshold. Re-fires at +1M. Bounds are 100k–50M. Settings only. |
+| `set` | Asks for the amount. Settings only. |
+| `rc on/off` | Starts the new session with `--remote-control`, so it can be driven from your phone through claude.ai. Settings only. |
+| `automode on/off` | ⚠️ Starts the new session with `--dangerously-skip-permissions`. Settings only. |
+| `fullauto on/off` | ⚠️ Lets the nudge run pitstop unattended in the same turn. Settings only. |
+| `push <moment> …` | Sends phone notifications for `nudge`, `waiting`, `spawned`, or `ready`. Settings only. |
 
 ### How `auto` hands off
 
-1. A 16-hex **nonce** binds the whole hand-off, so a stale watcher from a failed
-   prior hand-off can't be released by the wrong session.
-2. **Bank first, spawn last:** a pre-spawn gate denies the launch until **both**
-   resume files are freshly written this turn (a filesystem check, never the chat
-   transcript — chat text is flushed after hooks run).
-3. `pitstop_handoff.py start` fingerprints the current window (handle + PID + start
-   time), launches a new terminal running
-   `claude "Read …/resume_<track>.txt and follow it."`, and spawns a detached watcher.
-4. The new session runs `pitstop_handoff.py confirm` after verifying its resume; only
-   then does the watcher politely close the **old** window. On any doubt or a 10-min
-   timeout it leaves the old window open. **Failure mode: an extra window open, never
-   lost work.**
+1. A 16-hex **nonce** ties the handoff together, so a stale watcher from an earlier failed handoff cannot release the wrong session.
+2. **Bank first, spawn last:** the pre-spawn gate blocks launch until both resume files have been freshly written for this turn. It checks the filesystem, not the chat transcript, because chat text is flushed after hooks run.
+3. `pitstop_handoff.py start` fingerprints the current window using the handle, PID, and process start time. Then it launches a new terminal running `claude "Read …/resume_<track>.txt and follow it."` and starts a detached watcher.
+4. The new session runs `pitstop_handoff.py confirm` after verifying its resume. Only then does the watcher politely close the old window. If anything looks wrong, or if 10 minutes pass, the old window stays open. The failure mode is an extra window, not lost work.
 
 ### The hooks
 
-- **nudge** (Stop) — a cumulative-token watch; fires the pitstop offer at your
-  configured mark (with `fullauto`, it acts the same turn).
-- **verify** (Stop) — makes an incomplete pitstop impossible to end a turn on; gates
-  on the resume **file**, and bounces a resume whose first line has no topic.
-- **spawn-gate** (PreToolUse) — the bank-before-spawn gate above.
-- **cli_window** — saves/restores the terminal window position so the fresh session
-  reopens where the old one sat.
+- **nudge** (`Stop`) — watches cumulative tokens and offers a pitstop at your configured threshold. With `fullauto`, it acts in the same turn.
+- **verify** (`Stop`) — prevents an incomplete pitstop from ending a turn. It checks the resume file and rejects any resume whose first line has no topic.
+- **spawn-gate** (`PreToolUse`) — enforces the bank-before-spawn rule.
+- **cli_window** — saves and restores terminal window position so the new session opens where the old one was.
 
 ### Permissions
 
-The hand-off **never widens permissions**: the new session starts in Claude Code's
-default ask mode, with a user-level allowlist pre-approving exactly the two commands
-the resume flow runs — so it runs prompt-free **without** bypass. The one exception
-is `automode`, which **you** set yourself; Claude never adds
-`--dangerously-skip-permissions` on its own.
+The handoff **does not widen permissions**. By default, the new session starts in Claude Code’s normal ask mode. A user-level allowlist pre-approves only the two commands needed by the resume flow, so the handoff can run without prompts while still avoiding a full bypass.
 
-> ### ⚠️ `automode` / `fullauto` — read this
-> `automode` makes the resumed session auto-execute its checkpoint file **with no
-> permission prompts** — a tampered checkpoint would run unattended. `fullauto` means
-> a pitstop fires and hands off **with nobody watching**. Together: fully unattended,
-> end to end. Opt-in, off by default, expert-only, ideally on an isolated machine.
-> The permission prompt is your last line of defence against a bad instruction —
-> these switches trade it away.
+The exception is `automode`, which **you** must enable yourself. Pitwall never adds `--dangerously-skip-permissions` on its own.
 
-*Status: the ↻ button and the `/pitstop` checkpoint command ship in this repo. The
-full hands-off ritual + hooks are the author's local toolchain (machine-wired paths,
-not yet bundled for a clone).*
+> ### ⚠️ `automode` / `fullauto` — read this first
+> `automode` lets the resumed session execute its checkpoint file without permission prompts. If that checkpoint is tampered with, it could run unattended. `fullauto` lets a pitstop fire and hand off with nobody watching. Together, they create a fully unattended flow. They are off by default, intended for experts, and safest on an isolated machine. The permission prompt is your last line of defense against a bad instruction; these switches trade that away.
+
+*Status: the ↻ button and the `/pitstop` checkpoint command ship in this repo. The full hands-off ritual and hooks are part of the author’s local toolchain. They use machine-specific paths and are not yet bundled for a clean clone.*
 
 ---
 
 ## Install & run
 
-Download or clone this folder **anywhere** — nothing is tied to a fixed path.
+Download or clone this folder **anywhere**. Nothing depends on a fixed path.
 
-**You need:** Python 3.8+, and **Claude Code** installed and used on this machine.
-The widget is drawn with **PySide6**; if it's missing, the first launch offers to
-fetch it for you (a one-time `pip install`, ~100 MB). That download is the *only*
-network request Pitwall ever makes, and it's opt-in.
+**Requirements:** Python 3.8+ and **Claude Code** installed and used on this machine.
 
-- **Windows** (primary): double-click **`Pitwall.bat`**.
-- **macOS / Linux:** `python3 launcher.py`.
-- **Move it:** drag the header. **Resize:** drag an edge. **Close:** the ✕.
-- **Start with Windows** (optional): **⚙ → Identity → Window → Start with Windows**.
+Pitwall is drawn with **PySide6**. If PySide6 is missing, the first launch offers to install it for you with a one-time `pip install` of about 100 MB. That download is the **only** network request Pitwall makes, and it is opt-in.
 
-> macOS/Linux note: the core works cross-platform; two touches are
-> Windows-flavoured (the "open a fresh terminal" button and the live process check)
-> and degrade gracefully elsewhere. PRs to polish them are welcome.
+- **Windows**, primary: double-click **`Pitwall.bat`**.
+- **macOS / Linux:** run `python3 launcher.py`.
+- **Move it:** drag the header.
+- **Resize it:** drag an edge.
+- **Close it:** click the ✕.
+- **Start with Windows:** use **⚙ → Identity → Window → Start with Windows**.
+
+> macOS/Linux note: the core works cross-platform. Two features are Windows-flavored: opening a fresh terminal and checking live processes. They degrade gracefully on other platforms. PRs to improve them are welcome.
 
 ---
 
 ## Honest limits
 
-- **CLI only.** Claude Desktop and the claude.ai website don't write usage to your
-  PC, so Pitwall can't include them — use Settings → Usage for the all-surfaces
-  number (and Sync it in).
-- **The `$` is an estimate**, not a bill on a subscription, and close-but-not-exact
-  on a metered key.
-- **The real reset/limit isn't readable locally** — Pitwall estimates it, or you pin
-  it via Sync.
-- **Prices can drift** between Anthropic updates — keep them current via Rates
-  (above).
+- **CLI only.** Claude Desktop and claude.ai do not write usage to your PC, so Pitwall cannot include them. Use Settings → Usage for the all-surfaces number, then sync it into Pitwall.
+- **The `$` is an estimate.** It is not a bill on a subscription, and it is close but not exact on a metered key.
+- **The real reset and limit are not readable locally.** Pitwall estimates them unless you pin them with Sync.
+- **Prices can drift** when Anthropic changes pricing. Keep them current in Rates.
 
 ---
 
-## How it works (short version)
+## How it works, short version
 
-Claude Code writes every turn, with exact token counts, into local transcript files
-under `~/.claude/`. Pitwall reads the recent ones, sums the usage inside your current
-window, and prices it. It verifies each session's process is really running before
-calling it "open." Everything is read-only and local — it reads token counts,
-session titles and project folders, never the content of your messages.
+Claude Code writes every turn, including exact token counts, into local transcript files under `~/.claude/`. Pitwall reads the recent files, sums the usage in your current window, and prices it. Before calling a session “open,” it checks that the process is actually running.
 
-Two files: behaviour in `ts_core.py` (no GUI), the widget in `pitwall_qt.py`
-(PySide6). Beyond PySide6 it's pure standard library.
+Everything is read-only and local. Pitwall reads token counts, session titles, and project folders. It does **not** read or transmit the content of your messages.
 
-## Contributing & licence
+Two main files do the work: `ts_core.py` handles behavior without the GUI, and `pitwall_qt.py` draws the PySide6 widget. Aside from PySide6, it uses only the Python standard library.
 
-Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). [MIT](LICENSE) — do
-what you like, no warranty.
+## Contributing & license
+
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Released under the [MIT License](LICENSE): do what you like, no warranty.
