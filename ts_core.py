@@ -1093,8 +1093,13 @@ def checkpoint_index(pitstop_dir=PITSTOP_DIR):
 
 
 def session_name(s):
-    """A short human label for a session: its curated checkpoint recap (where we left
-    off), else its native AI title, else the project folder."""
+    """A short human label for a session. For an OPEN row, its live terminal-tab title
+    wins, so the row reads exactly like the taskbar tab the user is looking at. Else:
+    its curated checkpoint recap (where we left off), its native AI title, the folder."""
+    if s.get("open"):
+        wtitle = (s.get("wtitle") or "").strip()
+        if wtitle:
+            return wtitle
     recap = (s.get("recap") or "").strip()
     if recap:
         return recap
@@ -1129,6 +1134,18 @@ def pid_alive(pid):
 
 
 TRACKED_CLI_EXES = ("claude", "codex")   # codex: future-proofing (owner, 2026-06-11)
+
+# A real interactive CLI window is launched from a SHELL — you type `claude` in one,
+# or a launcher opens a terminal whose shell runs it. So a tracked CLI process is a
+# user's window only when its parent is one of these. This cleanly excludes the
+# background daemon (parent sihost.exe), the daemon's hosted jobs (parent claude.exe),
+# and the IDE/VS Code integration (parent code.exe), none of which are windows the
+# user opened. (owner, 2026-06-19)
+TERMINAL_PARENT_EXES = frozenset((
+    "powershell.exe", "pwsh.exe", "cmd.exe",
+    "bash.exe", "sh.exe", "zsh.exe", "fish.exe", "wsl.exe",
+    "conhost.exe", "openconsole.exe", "windowsterminal.exe", "wt.exe",
+))
 
 
 def pid_image(pid):
@@ -1290,6 +1307,123 @@ def daemon_hosted(pid, pmap=None):
     return False
 
 
+def proc_cwd(pid):
+    """The working directory of a live process, or None if it can't be read.
+
+    Claude Code 2.1.x only writes ~/.claude/sessions/<pid>.json for bridge/IDE
+    sessions, so plain terminal sessions have no registry file and Pitwall can't
+    otherwise tell which windows are open. A process's OWN current directory is the
+    one reliable signal — it pins each live CLI to its project folder. Read it the
+    standard way: NtQueryInformationProcess for the PEB, then ReadProcessMemory to
+    walk PEB -> ProcessParameters -> CurrentDirectory (a UNICODE_STRING). x64 only.
+
+    SECURITY (Ivan): read-only; opens by pid with the minimum rights
+    (QUERY_INFORMATION | VM_READ); only ever called on our own user's tracked CLI
+    processes (see open_session_dirs); every failure path returns None (fail-closed),
+    never raises. No process is written to or controlled. None off-Windows."""
+    if os.name != "nt":
+        return None
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    import ctypes
+    import ctypes.wintypes as wt
+
+    class _PBI(ctypes.Structure):
+        _fields_ = [("Reserved1", ctypes.c_void_p), ("PebBaseAddress", ctypes.c_void_p),
+                    ("Reserved2", ctypes.c_void_p * 2), ("UniqueProcessId", ctypes.c_void_p),
+                    ("Reserved3", ctypes.c_void_p)]
+
+    k = ctypes.windll.kernel32
+    nt = ctypes.windll.ntdll
+    k.OpenProcess.restype = ctypes.c_void_p
+    k.ReadProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+    h = k.OpenProcess(0x0400 | 0x0010, False, pid)   # QUERY_INFORMATION | VM_READ
+    if not h:
+        return None
+    try:
+        pbi = _PBI()
+        if nt.NtQueryInformationProcess(ctypes.c_void_p(h), 0, ctypes.byref(pbi),
+                                        ctypes.sizeof(pbi), None) != 0:
+            return None
+        peb = pbi.PebBaseAddress
+        if not peb:
+            return None
+
+        def _rd(addr, size):
+            buf = ctypes.create_string_buffer(size)
+            got = ctypes.c_size_t()
+            if not k.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, size,
+                                       ctypes.byref(got)):
+                return None
+            return buf.raw
+
+        # x64 offsets: PEB.ProcessParameters @0x20; RTL_USER_PROCESS_PARAMETERS
+        # .CurrentDirectory.DosPath (UNICODE_STRING) @0x38.
+        pp = _rd(peb + 0x20, 8)
+        if not pp:
+            return None
+        params = int.from_bytes(pp, "little")
+        us = _rd(params + 0x38, 16)              # UNICODE_STRING: Length(2) .. Buffer@8
+        if not us:
+            return None
+        length = int.from_bytes(us[0:2], "little")
+        ptr = int.from_bytes(us[8:16], "little")
+        if not length or not ptr:
+            return None
+        raw = _rd(ptr, length)
+        if not raw:
+            return None
+        val = raw.decode("utf-16-le", errors="replace")
+        # Sanity-gate the decoded string: a real cwd is an absolute drive ("C:\\…")
+        # or UNC ("\\\\…") path. Anything else is a bad read (e.g. a 32-bit/WOW64
+        # target walked with x64 offsets) — drop it so it can't become a junk row.
+        if val.startswith("\\\\"):
+            return val
+        if len(val) >= 3 and val[0].isalpha() and val[1] == ":" and val[2] in "\\/":
+            return val
+        return None
+    except Exception:
+        return None
+    finally:
+        k.CloseHandle(ctypes.c_void_p(h))
+
+
+def open_session_dirs(pmap=None):
+    """Normalised work folder -> (live-window count, a display-case folder path).
+
+    The authoritative 'which sessions are open' signal. Each entry is one or more real
+    terminal windows — a tracked CLI process whose parent is a shell/terminal
+    (TERMINAL_PARENT_EXES) — keyed by its own working folder. That parent test excludes
+    the background daemon, its hosted jobs, and the IDE integration, leaving only
+    windows the user opened. The display path lets a caller name a window that has no
+    transcript yet. {} off-Windows / on any failure → callers degrade to registry-only
+    detection."""
+    if os.name != "nt":
+        return {}
+    if pmap is None:
+        pmap = process_map()
+    cli = tuple(e + ".exe" for e in TRACKED_CLI_EXES)
+    dirs = {}
+    for pid, (par, exe) in pmap.items():
+        if exe not in cli:
+            continue
+        if pmap.get(par, (None, ""))[1] not in TERMINAL_PARENT_EXES:
+            continue                                   # daemon / daemon-child / IDE host
+        cwd = proc_cwd(pid)
+        if not cwd:
+            continue
+        cwd = cwd.rstrip("\\/")
+        key = _ck_norm_dir(cwd)
+        if not key:
+            continue
+        cnt, disp = dirs.get(key, (0, cwd))
+        dirs[key] = (cnt + 1, disp)
+    return dirs
+
+
 def registry_stamp():
     """Cheap change-detector for the live-session registry: the sorted filenames of
     the registry dir. One file per session PROCESS, so the stamp changes exactly
@@ -1317,6 +1451,61 @@ def _user_text(msg):
                  if isinstance(b, dict) and b.get("type") == "text"]
         return "\n".join(p for p in parts if p) or None
     return None
+
+
+def _mark_open_inferred(r):
+    """Stamp a synthesised row as an open window we inferred from a live process
+    (no registry entry, so no pid/status/job fields)."""
+    r["open"] = True
+    r["open_inferred"] = True
+    r["bg"] = r["daemon"] = r["stuck"] = False
+    r["status"] = r["entrypoint"] = r["pid"] = None
+    return r
+
+
+def _idle_open_row(path):
+    """A minimal session row for an OPEN-but-idle window — one whose last activity
+    predates the usage window, so collect_sessions' main scan skipped it. Carries the
+    folder + label so the row is recognisable, last-activity from the file mtime, and
+    ZERO in-window spend (it has, by definition, spent nothing this window). Only the
+    head is read (cwd/label/first appear early), so this stays cheap on big idle logs.
+    None if the file can't be read."""
+    sid = os.path.splitext(os.path.basename(path))[0]
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return None
+    s = {"sid": sid, "tok": 0, "usd": 0.0,
+         "last": datetime.fromtimestamp(mt, timezone.utc), "ctx": 0,
+         "cwd": None, "label": None, "first": None, "branch": None,
+         "model": None, "path": path, "in": 0, "out": 0, "cw": 0, "cr": 0}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for _ in range(40):
+                line = fh.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                if o.get("cwd"):
+                    s["cwd"] = o["cwd"]
+                if o.get("gitBranch"):
+                    s["branch"] = o["gitBranch"]
+                if o.get("aiTitle"):
+                    s["label"] = o["aiTitle"]
+                if (s["first"] is None and o.get("type") == "user"
+                        and not o.get("isSidechain") and not o.get("isMeta")):
+                    t = _user_text(o.get("message"))
+                    if t:
+                        s["first"] = " ".join(t.split())[:160]
+    except OSError:
+        return None
+    return s
 
 
 def collect_sessions(window_hours):
@@ -1444,6 +1633,89 @@ def collect_sessions(window_hours):
         s.setdefault("entrypoint", None)
         s.setdefault("pid", None)
         s.setdefault("path", None)
+        s.setdefault("open_inferred", False)
+
+    # --- authoritative open-state from live process folders (owner, 2026-06-19) ---
+    # The ~/.claude/sessions registry only covers bridge/IDE sessions, so plain
+    # terminal windows read 'closed' off the merge above. A live CLI process pinned
+    # to its own work folder is the reliable signal: mark every row whose folder has
+    # a live window 'open', then surface any open window with NO in-window row (a
+    # session idle since before the 5h window) by synthesising a zero-spend row from
+    # its newest transcript — capped at that folder's live-window count, so we never
+    # invent more open rows than there are real windows. (Replaces the registry file
+    # as the 'open?' source after Claude Code 2.1.x stopped registering terminals.)
+    open_dirs = open_session_dirs(pmap)
+    if open_dirs:
+        have = {}
+        for s in sessions:
+            d = _ck_norm_dir(s["cwd"]) if s.get("cwd") else None
+            if d and d in open_dirs:
+                s["open"] = True
+            if d:
+                have[d] = have.get(d, 0) + 1
+        need = {d: cnt - have.get(d, 0) for d, (cnt, _disp) in open_dirs.items()}
+        need = {d: n for d, n in need.items() if n > 0}
+        if need:
+            known = {s["sid"] for s in sessions}
+            for proj in glob.glob(os.path.join(PROJECTS_ROOT, "*")):
+                if not need:
+                    break
+                if not os.path.isdir(proj):
+                    continue
+                files = []
+                for path in glob.glob(os.path.join(proj, "*.jsonl")):
+                    sid = os.path.splitext(os.path.basename(path))[0]
+                    if sid.startswith("agent-") or sid in known:
+                        continue
+                    try:
+                        files.append((os.path.getmtime(path), path))
+                    except OSError:
+                        continue
+                if not files:
+                    continue
+                files.sort(reverse=True)
+                row = _idle_open_row(files[0][1])    # newest file IDs the folder
+                if not row or not row.get("cwd"):
+                    continue
+                d = _ck_norm_dir(row["cwd"])
+                if d not in need:
+                    continue
+                rows = [row]
+                for _mt, path in files[1:need[d]]:
+                    r = _idle_open_row(path)
+                    if r:
+                        rows.append(r)
+                for r in rows:
+                    _mark_open_inferred(r)
+                    sessions.append(r)
+                    known.add(r["sid"])
+                del need[d]
+            # Any folder still needed has a live window but NO flat transcript yet
+            # (a brand-new session, or one stored only in the new <sid>/ dir format).
+            # Show it anyway from the folder alone, so an open window is never hidden.
+            for d, n in need.items():
+                _cnt, disp = open_dirs[d]
+                for i in range(n):
+                    r = {"sid": "live:%s%s" % (d, "" if i == 0 else "#%d" % i),
+                         "tok": 0, "usd": 0.0, "last": None, "ctx": 0, "cwd": disp,
+                         "label": None, "first": None, "branch": None, "model": None,
+                         "path": None, "in": 0, "out": 0, "cw": 0, "cr": 0}
+                    _mark_open_inferred(r)
+                    sessions.append(r)
+
+    # Give every open row the title + handle of its real terminal tab, so a row reads
+    # the way the taskbar tab does ("All Projects", "Hoover") and click-to-flash has a
+    # window to ring — both were stale/missing on the synthesised idle rows, which carry
+    # an old session's title and no live window (owner, 2026-06-19).
+    if open_dirs:
+        wmap = windows_by_open_dir(open_dirs, pmap)
+        for s in sessions:
+            if not s.get("open"):
+                continue
+            d = _ck_norm_dir(s["cwd"]) if s.get("cwd") else None
+            hw = wmap.get(d) if d else None
+            if hw:
+                s["whwnd"], s["wtitle"] = hw
 
     # attach the curated checkpoint recap (the "where we left off" row label),
     # built once for the whole rollup and matched by each session's work folder.
@@ -1687,6 +1959,46 @@ def _terminal_windows():
 
     w["u"].EnumWindows(cb, 0)
     return found
+
+
+def windows_by_open_dir(open_dirs, pmap=None):
+    """Map each open work folder (normalised, from open_session_dirs) to the
+    (hwnd, display_title) of its terminal TAB, so an open row can show the tab title
+    the user sees in the taskbar and offers a real window to flash.
+
+    A tab titled '<name> — Claude' (the pitstop tab-titling, frozen by
+    --suppressApplicationTitle) is matched to a folder by basename. A tab whose title
+    is an AI summary, not a folder name (e.g. 'All Projects — Claude' for a C:\\dev
+    session), is paired to a leftover open folder by elimination. {} off-Windows or
+    when no titled tabs are found — callers then fall back to the existing
+    transcript/sidmap labelling."""
+    if not open_dirs:
+        return {}
+    wins = []                                   # (hwnd, display_name, name_lower)
+    for h in _terminal_windows():
+        t = (_win_title(h) or "").strip()
+        if t.lower().endswith("claude") and len(t) > 6:
+            name = t[:-6].rstrip().rstrip("—-").rstrip()    # drop 'Claude' + separator
+            if name:
+                wins.append((h, name, name.lower()))
+    if not wins:
+        return {}
+    by_name = {}
+    for h, name, nl in wins:
+        by_name.setdefault(nl, (h, name))
+    out = {}
+    used = set()
+    for d in open_dirs:                         # 1) exact folder-basename matches
+        base = d.rstrip("/").split("/")[-1]
+        hit = by_name.get(base)
+        if hit:
+            out[d] = hit
+            used.add(hit[0])
+    rem_dirs = [d for d in open_dirs if d not in out]
+    rem_wins = [(h, name) for h, name, _nl in wins if h not in used]
+    for d, hw in zip(rem_dirs, rem_wins):       # 2) leftovers paired by elimination
+        out[d] = hw
+    return out
 
 
 def _norm_title(s):

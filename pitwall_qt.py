@@ -2731,7 +2731,12 @@ class StewardQt(QWidget):
             self._apply_tip_visibility()   # re-show tip row if tips_off (must be seen)
             self._relayout()
             return
-        hwnd = self._focus.window_for_sid(s["sid"], self._sessions)
+        # The folder→tab match (collect_sessions) gives a live window directly, which
+        # the sid-based lookup can't for a synthesised idle row (fake/stale sid). Trust
+        # it only if it's still a live, sized window; else fall back to the evidence chain.
+        hwnd = s.get("whwnd")
+        if not (hwnd and ts.window_rect(hwnd)):
+            hwnd = self._focus.window_for_sid(s["sid"], self._sessions)
         if not hwnd:
             self._set_tip(FLASH_MISS_TIP)
             self._apply_tip_visibility()   # re-show tip row if tips_off (FLASH_MISS must show)
