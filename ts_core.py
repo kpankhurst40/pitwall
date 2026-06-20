@@ -1646,13 +1646,39 @@ def collect_sessions(window_hours):
     # as the 'open?' source after Claude Code 2.1.x stopped registering terminals.)
     open_dirs = open_session_dirs(pmap)
     if open_dirs:
+        # An open session backed by a live process: trust the PROCESS's real folder over
+        # the transcript's last-recorded cwd, which can be a stale subfolder it has since
+        # left (FamilyArchive\app vs FamilyArchive — that split both mislabels the row AND
+        # double-counts it against proc_cwd's folder view, owner 2026-06-20).
+        for s in sessions:
+            if s.get("open") and s.get("pid"):
+                live = proc_cwd(s["pid"])
+                d = _ck_norm_dir(live) if live else None
+                if d and d in open_dirs:
+                    s["cwd"] = open_dirs[d][1]
+        # Mark open at most N rows per folder, N = that folder's live-window count. Slots
+        # already taken by a live-pid open row (above) are subtracted; any remaining go to
+        # the most-recently-active rows — so several recent transcripts in a folder with
+        # ONE open window can't all read 'open' (the 3×FamilyArchive over-count). 'have'
+        # counts every row in the folder; the synth-row 'need' below is keyed on that.
+        by_dir = {}
         have = {}
         for s in sessions:
             d = _ck_norm_dir(s["cwd"]) if s.get("cwd") else None
-            if d and d in open_dirs:
-                s["open"] = True
             if d:
+                by_dir.setdefault(d, []).append(s)
                 have[d] = have.get(d, 0) + 1
+        _floor = datetime.min.replace(tzinfo=timezone.utc)
+        for d, rows in by_dir.items():
+            if d not in open_dirs:
+                continue
+            slots = open_dirs[d][0] - sum(1 for s in rows if s.get("open"))
+            if slots <= 0:
+                continue
+            cand = sorted((s for s in rows if not s.get("open")),
+                          key=lambda r: r.get("last") or _floor, reverse=True)
+            for s in cand[:slots]:
+                s["open"] = True
         need = {d: cnt - have.get(d, 0) for d, (cnt, _disp) in open_dirs.items()}
         need = {d: n for d, n in need.items() if n > 0}
         if need:

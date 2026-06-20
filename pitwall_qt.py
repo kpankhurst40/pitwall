@@ -1266,6 +1266,23 @@ class StewardQt(QWidget):
         self._sess_empty = self._mk("no recent Claude sessions", 8, ts.FAINT)
         self._sess_empty.setVisible(False)
         self.sess_box.addWidget(self._sess_empty)
+        # "+N more" expander — the full list shows max_sessions rows by default; clicking
+        # this reveals the rest (and collapses again). It lives in the OUTER column below
+        # the row box, so the dynamic row-insert logic above is untouched (owner 2026-06-20).
+        self._sessions_expanded = False
+        self._sess_more = self._mk("", 8, ts.MUT, semibold=True)
+        self._sess_more.setVisible(False)
+        self._sess_more.setCursor(Qt.PointingHandCursor)
+
+        def _more_click(e):
+            if e.button() == Qt.LeftButton:
+                self._sessions_expanded = not self._sessions_expanded
+                self.refresh()
+                return
+            e.ignore()
+        self._sess_more.mousePressEvent = _more_click
+        lay.addSpacing(2)
+        lay.addWidget(self._sess_more)
 
         lay.addSpacing(14)   # seam above
         lay.addWidget(self._rule())
@@ -1969,11 +1986,22 @@ class StewardQt(QWidget):
         drift = self._drift
 
         # --- headline $ + token line ---
-        if d.get("active"):
+        # A live session can be open while its tokens aren't on disk yet — current
+        # Claude Code flushes the session transcript at the END of a turn, so the
+        # window total below genuinely can't include the chat you're typing in.
+        live_unmeasured = any(s.get("open") and not s.get("usd")
+                              for s in sessions)
+        if d.get("active") and d.get("tok"):
             self.caption.setText(f"This {wh}-hour window")
             self.dollars.setText(f"${d['usd']:.2f}")
             self.sub.setText(f"{ts.fmt_tokens(d['tok'])} tokens · value at "
                              f"pay-per-use prices")
+        elif live_unmeasured:
+            # Don't reassure with "nothing used yet" while a live session is spending
+            # tokens we can't read yet — say plainly that it'll fill in.
+            self.caption.setText(f"This {wh}-hour window")
+            self.dollars.setText(f"${d.get('usd', 0.0):.2f}")
+            self.sub.setText("live session not counted yet · syncs after each turn")
         else:
             self.caption.setText("Window open")
             self.dollars.setText("$0.00")
@@ -2105,6 +2133,19 @@ class StewardQt(QWidget):
                 f'<span style="color:{ts.FAINT};"> · demo heat </span>'
                 f'<span style="{_mono} color:{ts.INK};">'
                 f'{int(round(cli_frac * 100))}%</span>')
+            self.conv_dot.setVisible(True)
+        elif cur and cur.get("open") and not cur.get("usd"):
+            # The focused window is open but has no measured in-window spend: current
+            # Claude Code doesn't write the live session's token usage to disk until the
+            # turn finishes, so this chat genuinely can't be measured right now. Say so
+            # plainly instead of showing a fabricated "0 chat size · $0.00".
+            self.conv.setText(
+                f'<span style="color:{ts.FAINT};">this chat · </span>'
+                f'<span style="color:{ts.MUT};">live — counts sync after each turn</span>')
+            self.conv.setToolTip(_tip(
+                "This session is open, but Claude Code hasn't written its token usage to "
+                "disk yet — it does that when the turn finishes, and the numbers fill in "
+                "then."))
             self.conv_dot.setVisible(True)
         elif cur:
             # Lead is always the stable "this chat" role label. When focus-follow is
@@ -2431,8 +2472,10 @@ class StewardQt(QWidget):
         self.sess_cap.setText(f"Claude sessions · {n_open} open")
         ctx_red = cfg.get("ctx_red", 220000) or 220000
 
-        # full-card rows
-        shown = sessions[: cfg.get("max_sessions", 5)]
+        # full-card rows — capped at max_sessions, expandable on demand (+N more)
+        max_n = cfg.get("max_sessions", 5) or 5
+        total = len(sessions)
+        shown = sessions if self._sessions_expanded else sessions[:max_n]
         # Right-gutter column widths are FIT to their widest realistic content (font-metric-
         # derived, not magic px) so the state·tokens·$ cluster reads tight with no dead
         # whitespace, while staying fixed-width + right-aligned so columns still line up down
@@ -2459,6 +2502,13 @@ class StewardQt(QWidget):
         for i in range(len(shown), len(self._sess_pool)):
             self._sess_pool[i].setVisible(False)
         self._sess_empty.setVisible(not shown)
+        # the "+N more" / "show fewer" expander, only when the list overflows the cap
+        if total > max_n:
+            self._sess_more.setText("show fewer ▲" if self._sessions_expanded
+                                    else f"+{total - max_n} more ▼")
+            self._sess_more.setVisible(True)
+        else:
+            self._sess_more.setVisible(False)
 
         # compact strip rows (open windows only)
         opens = [s for s in sessions if s.get("open")]
@@ -2636,10 +2686,19 @@ class StewardQt(QWidget):
         holder._state.setText(ts.session_state_word(s, now))
         self._recolor(holder._state, col)   # base heat — matches the row dot (owner 2026-06-12)
         holder._tok.setFixedWidth(tok_w)
-        holder._tok.setText(ts.fmt_tokens(s.get("tok", 0)))
-        self._recolor(holder._tok, ts.MUT if is_open else ts.FAINT)
         holder._money.setFixedWidth(money_w)
-        holder._money.setText(f"${s.get('usd', 0.0):.2f}")
+        if is_open and not s.get("usd"):
+            # Open window with no measured in-window spend — either a live session whose
+            # transcript isn't on disk yet (Claude Code flushes it at turn end), a
+            # synthesised open-window row, or one idle since before this 5h window. A
+            # measured row always has usd > 0 (the scan requires it), so a zero here was
+            # never actually counted: show "—", never a fabricated "$0.00".
+            holder._tok.setText("—")
+            holder._money.setText("—")
+        else:
+            holder._tok.setText(ts.fmt_tokens(s.get("tok", 0)))
+            holder._money.setText(f"${s.get('usd', 0.0):.2f}")
+        self._recolor(holder._tok, ts.MUT if is_open else ts.FAINT)
         if not is_open:                                   # closed rows never reveal ↻
             holder._restart.setVisible(False)
             if self._hover_row is holder:
