@@ -61,11 +61,14 @@ from PySide6.QtWidgets import (  # noqa: E402
 QT_FACE_VERSION = "0.1"
 
 # --- shape constants (Pitwall reskin E, 2026-06-11) --------------------------
-RING_W = 3.0           # heat-ring pen width (QPen). RESTORED to 3px (owner 2026-06-12,
-                       # "we lost the heat ring"): the 2026-06-11 Fluent reskin had thinned
-                       # it to a 1px hairline that barely showed the heat colour. 3px is the
-                       # historical heat-ring weight; owner's bold-over-muted call wins over
-                       # the O3 "1px" spec.
+RING_W = 5.0           # heat-ring pen width, in LOGICAL px (owner: "bolder", 2026-06-22).
+                       # History: Fluent reskin thinned it to a 1px hairline; restored to 3px
+                       # 2026-06-12; bumped to 5px here. The pen is NON-cosmetic (see paintEvent)
+                       # so this is logical px that scale with display DPI — renders ~5px @100%,
+                       # ~7.5px @150%, ~10px @200%, so it reads as boldly on a scaled display as
+                       # the owner's instinctive "7px". 5 (not 7) keeps the stroke proportionate
+                       # to the 8px CARD_RADIUS corner. Kept flat-logical (not font-ladder-scaled)
+                       # to match HALO_PX / CARD_RADIUS, the card's other frame constants.
 HALO_PX = 10           # transparent outer margin around the card (hosts the window shadow)
 CARD_RADIUS = 8        # card corner radius; OverlayCornerRadius per O3 Fluent spec
 # Demo MODE flag (set True in main() on `--demo-mode`). Module-level so a theme rebuild,
@@ -5771,13 +5774,15 @@ class StewardQt(QWidget):
         p.setBrush(QColor(ts.BG))
         p.drawRoundedRect(r_card, CARD_RADIUS, CARD_RADIUS)
 
-        # 3. Heat ring: heat-coloured stroke centred on the card edge, pulsing (RING_W px;
-        #    3px restored 2026-06-12 — see RING_W). Centred on r_card so half the weight
-        #    sits over the shadow apron and half over the card, reading as a frame hugging
-        #    the card. (Was a 0.5px-inset hairline rect when RING_W was 1px.)
+        # 3. Heat ring: heat-coloured stroke centred on the card edge, pulsing (RING_W
+        #    logical px — see RING_W). Centred on r_card so half the weight sits over the
+        #    shadow apron and half over the card, reading as a frame hugging the card.
+        #    NON-cosmetic on purpose: a cosmetic pen's width is DEVICE px, so "5" would
+        #    render only ~2.5 logical px on a 200%-scaled display (the bug behind the ring
+        #    looking thinner than its number). Non-cosmetic = the width scales with DPI,
+        #    matching the shadow + hover pens. RING_W/2 (2.5px) stays well inside HALO_PX=10.
         ring_rect = r_card
         ring_pen = QPen(QColor(self._ring_col), RING_W)
-        ring_pen.setCosmetic(True)
         p.setBrush(Qt.NoBrush)
         p.setPen(ring_pen)
         p.drawRoundedRect(ring_rect, CARD_RADIUS, CARD_RADIUS)
