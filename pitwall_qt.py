@@ -835,6 +835,26 @@ class StewardQt(QWidget):
         if _aot:
             self.t_topmost.start(21000)
 
+        # Reboot-restore: on the FIRST Pitwall start after a Windows reboot, reopen the
+        # Claude sessions that were running. boot_restore is a private, workspace-specific
+        # module imported LAZILY — an OSS build without it simply has no such feature.
+        QTimer.singleShot(1500, self._kick_boot_restore)
+
+    def _kick_boot_restore(self):
+        """Fire the one-time after-a-reboot session restore, OFF the GUI thread so the
+        launches never block the widget. No-ops if the user turned it off or the private
+        boot_restore module isn't present. The module itself enforces the once-per-boot
+        gate and the already-running dedupe guard."""
+        if not self.cfg.get("reopen_sessions_on_boot", True):
+            return
+        try:
+            import boot_restore
+        except Exception:
+            return
+        import threading
+        threading.Thread(target=boot_restore.run_boot_restore,
+                         args=(dict(self.cfg),), daemon=True).start()
+
     # === theme (light / dark / follow-OS) ==================================
     def apply_theme_choice(self, mode):
         """Settings picked System/Dark/Light: persist it, then repaint if it changed the
@@ -1212,6 +1232,25 @@ class StewardQt(QWidget):
         self._wrap.append(self.proj)
         lay.addWidget(self.proj)
 
+        # Freshness stamp + "sync now" — moved up here onto the 5-hour line
+        # (owner ask 2026-06-24). The synced number drives BOTH the 5-hour and the
+        # weekly bar, so its freshness/refresh control reads best next to the top
+        # bar. Faint absolute clock ("as of 11:40 AM"), hidden until the first sync;
+        # "sync now" is a one-shot /usage read (same worker as Settings' Sync now).
+        self.lsync = self._mk("", 7, ts.FAINT)
+        self.lsync.setVisible(False)
+        self.sync_link = self._ctl(self._mk("sync now", 7, ts.INK), self._card_sync_now)
+        srow = QHBoxLayout()
+        srow.setContentsMargins(0, 0, 0, 0)
+        srow.setSpacing(8)
+        srow.addWidget(self.lsync)
+        srow.addStretch(1)
+        srow.addWidget(self.sync_link)
+        lay.addSpacing(8)    # barline → sync row: 8px so the row reads as its own
+                             # group, not a sub-caption glued to the 5-hour barline
+                             # (Sarah, 2026-06-24)
+        lay.addLayout(srow)
+
     def _build_blockB(self, lay):
         # Weekly limit line — plain text (de-clicked with the 5-hour line, owner
         # eyeball 2026-06-11). Zero height until synced. (§3.1.9)
@@ -1239,21 +1278,8 @@ class StewardQt(QWidget):
         wkl.addWidget(self.wk_spacer)
         self.wk_track.setVisible(False)
         lay.addWidget(self.wk_track)
-
-        # Freshness stamp — faint absolute clock ("as of 11:40 AM"), hidden until the
-        # first sync — with a "sync now" control on the far right (owner ask 2026-06-11):
-        # one-shot /usage read, same worker as Settings' Sync now button.
-        self.lsync = self._mk("", 7, ts.FAINT)
-        self.lsync.setVisible(False)
-        self.sync_link = self._ctl(self._mk("sync now", 7, ts.INK), self._card_sync_now)
-        srow = QHBoxLayout()
-        srow.setContentsMargins(0, 0, 0, 0)
-        srow.setSpacing(8)
-        srow.addWidget(self.lsync)
-        srow.addStretch(1)
-        srow.addWidget(self.sync_link)
-        lay.addSpacing(2)
-        lay.addLayout(srow)
+        # (freshness stamp + "sync now" moved up to the 5-hour line in _build_blockA,
+        # owner ask 2026-06-24)
 
     def _build_blockC(self, lay):
         lay.addSpacing(14)   # seam above (§1.4)
@@ -1974,6 +2000,8 @@ class StewardQt(QWidget):
             self.sub.setText(f"(read error: {e})")
             return
         self.cfg = cfg
+        # Keep the reboot-restore snapshot current (inert, best-effort, never raises).
+        ts.record_open_sessions()
         wh = cfg.get("window_hours", 5)
         # Keep the "Resets in" countdown monotonic: the guessed reset can jitter
         # between refreshes (block-start slides as transcripts age) and would tick
@@ -4743,6 +4771,16 @@ class StewardQt(QWidget):
             detail="Launch Pitwall automatically when you sign in to Windows, so "
                    "the widget is always waiting for you. Turn off to start it "
                    "yourself.")
+        # Reopen Claude sessions after a reboot. Pitwall remembers which sessions
+        # were open and, on the first start after a restart, brings them back in the
+        # same conversation (via --resume) — opening The Grid first if it isn't up.
+        # Stored in config (cfg["reopen_sessions_on_boot"]); default ON.
+        reopen_state = switch_row(
+            ident, "Reopen my Claude sessions after a restart",
+            self.cfg.get("reopen_sessions_on_boot", True),
+            detail="After a Windows restart, automatically reopen the Claude Code "
+                   "sessions that were running — in the same conversation, where you "
+                   "left off. Turn off to start them yourself.")
 
         # === ACCURACY pane ===================================================
         # 2. YOUR PLAN
@@ -5301,6 +5339,9 @@ class StewardQt(QWidget):
             want_startup = (start_state["val"] == "on")
             if want_startup != ts.startup_enabled():
                 ts.set_startup(want_startup)
+            # reopen-sessions-on-boot: plain config flag (the recorder + boot-restore
+            # read it live), saved with the rest of the config below.
+            self.cfg["reopen_sessions_on_boot"] = (reopen_state["val"] == "on")
             self.cfg["calibration"] = new
             # pitstop launch options + nudge point live OUTSIDE Pitwall's config (the CLI
             # toolchain reads them from ~/.claude/pitstop) — write them on Save too.
@@ -5357,6 +5398,7 @@ class StewardQt(QWidget):
                 "plan": plan_state["val"],
                 "switches": dict(
                     [("aot", aot_state["val"]), ("start", start_state["val"]),
+                     ("reopen", reopen_state["val"]),
                      ("auto", astate["val"]),
                      ("nudge", nstate["val"]), ("tips", tips_state["val"])]
                     + [("ps_" + k, s["val"]) for k, s in ps_states.items()]),
@@ -5399,8 +5441,8 @@ class StewardQt(QWidget):
                 if k in edits:
                     edits[k].setText(v)
             plan_state["select"](restore["plan"])
-            _sw = {"aot": aot_state, "start": start_state, "auto": astate,
-                   "nudge": nstate, "tips": tips_state}
+            _sw = {"aot": aot_state, "start": start_state, "reopen": reopen_state,
+                   "auto": astate, "nudge": nstate, "tips": tips_state}
             _sw.update({"ps_" + k: s for k, s in ps_states.items()})
             for k, v in restore["switches"].items():
                 s = _sw.get(k)

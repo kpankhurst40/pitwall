@@ -48,6 +48,21 @@ SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")
 # A session listed here is a real Claude process with NO terminal window.
 JOBS_DIR = os.path.expanduser("~/.claude/jobs")
 
+
+def _pitwall_runtime_dir():
+    """Pitwall's per-machine runtime dir, OUTSIDE any repo (same spirit as the
+    hand-off checkpoint). Holds the reboot-restore state: the open-sessions snapshot
+    and the boot marker. Windows: %LOCALAPPDATA%\\Pitwall; fallback ~/.pitwall."""
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        return os.path.join(base, "Pitwall")
+    return os.path.join(os.path.expanduser("~"), ".pitwall")
+
+
+# Snapshot of the sessions open right now, rewritten every poll so a reboot can
+# reopen them. Inert data ONLY (work_dir + session_id) — see record_open_sessions.
+OPEN_SESSIONS_PATH = os.path.join(_pitwall_runtime_dir(), "open_sessions.json")
+
 # --- defaults (override any of these in pitwall_config.json) --------------------
 DEFAULTS = {
     "window_hours": 5,        # Claude's rolling usage window
@@ -107,6 +122,11 @@ DEFAULTS = {
     "focus_follow": "window",
     # Silence the rotating tip banner (the functional FLASH_MISS warning still shows).
     "tips_off": False,
+    # After a Windows restart, automatically reopen the Claude Code sessions that were
+    # running when the machine went down — same conversation, via `--resume` — ensuring
+    # The Grid is up first. Default ON (owner's "fully automatic" call, 2026-06-24).
+    # Fed by the recorder that writes %LOCALAPPDATA%\Pitwall\open_sessions.json each poll.
+    "reopen_sessions_on_boot": True,
     # --- "Nudge me" (user-driven auto-handoff, the SAFE FLOOR) ------------------
     # OFF until you opt in. When armed, Pitwall WATCHES the active session and taps your
     # shoulder when a fresh start would actually save — YOU (not Pitwall) then type
@@ -1200,6 +1220,71 @@ def live_registry():
         if not prev or (o.get("updatedAt") or 0) >= (prev.get("updatedAt") or 0):
             reg[sid] = o
     return reg
+
+
+def record_open_sessions():
+    """Persist a snapshot of the windowed Claude sessions open RIGHT NOW, so a reboot
+    can reopen them (see boot_restore in the widget). The file is rewritten every poll
+    with the current live set, so a cleanly-closed session simply drops out next poll
+    (that IS the pruning).
+
+    Stores INERT DATA ONLY — work_dir + session_id + last_active — never anything
+    executable; the restore path turns each into a fixed, reviewed launcher call.
+    Background-job sessions (no terminal window) are excluded — nothing to reopen.
+    Best-effort: a failed write must NEVER disturb the refresh loop that calls it."""
+    if DEMO_READONLY:        # demo construct: never write the user's real state
+        return
+    try:
+        reg = live_registry()
+        bg = bg_session_ids()
+        rows = []
+        for sid, rec in reg.items():
+            if not rec.get("alive") or sid in bg:
+                continue
+            cwd = rec.get("cwd")
+            if not cwd:
+                continue
+            rows.append({
+                "work_dir": cwd,
+                "session_id": sid,
+                "last_active": rec.get("updatedAt"),
+            })
+        snap = {
+            "schema": 1,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "sessions": rows,
+        }
+        os.makedirs(_pitwall_runtime_dir(), exist_ok=True)
+        tmp = OPEN_SESSIONS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(snap, fh, indent=2)
+        os.replace(tmp, OPEN_SESSIONS_PATH)      # atomic swap; no torn reads at boot
+    except Exception:
+        pass
+
+
+def load_open_sessions():
+    """Read the open-sessions snapshot (the inert list the recorder wrote). Returns a
+    list of {work_dir, session_id, last_active}; [] if absent/unreadable/malformed.
+    Validates shape defensively — this feeds the auto-restore at login, so a corrupt
+    file must degrade to 'restore nothing', never to a bad launch."""
+    try:
+        with open(OPEN_SESSIONS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for row in data.get("sessions") or []:
+        if not isinstance(row, dict):
+            continue
+        wd = row.get("work_dir")
+        sid = row.get("session_id")
+        if isinstance(wd, str) and wd and isinstance(sid, str) and sid:
+            out.append({"work_dir": wd, "session_id": sid,
+                        "last_active": row.get("last_active")})
+    return out
 
 
 def jobs_info():
