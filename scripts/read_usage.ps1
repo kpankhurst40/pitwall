@@ -71,11 +71,18 @@ public class PitwallCon {
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetConsoleScreenBufferInfo(IntPtr h, out CSBI info);
   [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool ReadConsoleOutputCharacterW(
     IntPtr h, StringBuilder buf, uint len, uint coord, out uint read);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool WriteConsoleInputW(
+    IntPtr h, INPUT_RECORD[] buf, uint len, out uint written);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
   [StructLayout(LayoutKind.Sequential)] public struct COORD { public short X, Y; }
   [StructLayout(LayoutKind.Sequential)] public struct SMALL_RECT { public short L, T, R, B; }
   [StructLayout(LayoutKind.Sequential)] public struct CSBI {
     public COORD Size; public COORD Cursor; public ushort Attr; public SMALL_RECT Win; public COORD MaxWin; }
+  [StructLayout(LayoutKind.Sequential)] public struct KEY_EVENT_RECORD {
+    public int bKeyDown; public ushort wRepeatCount; public ushort wVirtualKeyCode;
+    public ushort wVirtualScanCode; public ushort UnicodeChar; public uint dwControlKeyState; }
+  [StructLayout(LayoutKind.Explicit)] public struct INPUT_RECORD {
+    [FieldOffset(0)] public ushort EventType; [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent; }
 }
 "@
 $GENERIC_RW = [uint32]3221225472   # 0xC0000000 GENERIC_READ|GENERIC_WRITE
@@ -109,6 +116,42 @@ function Read-ConsoleText([int]$targetPid) {
   }
 }
 
+# Send a single ESCAPE keypress to a spawned session's console input. Used ONLY to clear
+# a first-run interstitial (e.g. the "Claude in Chrome extension detected" prompt, 2026-06)
+# that draws BEFORE the /usage panel and blocks it forever in a hidden, no-stdin spawn.
+# Esc is the safe choice: on these prompts it's the explicit "decline / keep off / back"
+# action (never "confirm"), so a mis-timed Esc can't enable anything - worst case it's a
+# no-op. Only ever targets a pid in OUR spawned tree. Returns $true if the keys were posted.
+function Send-ConsoleEsc([int]$targetPid) {
+  # Pid-recycle guard (workspace [RULE], learned 2026-06-11): a tree pid could die and be
+  # recycled into an unrelated process between enumeration and this write, sending it a
+  # stray Esc. Re-verify the image is a Claude process IMMEDIATELY before attaching - the
+  # /usage TUI is claude.exe (node child as a fallback). Exact-name match, never substring.
+  $img = (Get-Process -Id $targetPid -ErrorAction SilentlyContinue).ProcessName
+  if ($img -ne 'claude' -and $img -ne 'node') { return $false }
+  [PitwallCon]::FreeConsole() | Out-Null
+  if (-not [PitwallCon]::AttachConsole([uint32]$targetPid)) { return $false }
+  try {
+    $h = [PitwallCon]::CreateFileW("CONIN$", $GENERIC_RW, $SHARE_RW, [IntPtr]::Zero, $OPEN_EXIST, 0, [IntPtr]::Zero)
+    if ($h -eq [IntPtr]-1 -or $h -eq [IntPtr]::Zero) { return $false }
+    try {
+      $ke = New-Object PitwallCon+KEY_EVENT_RECORD
+      $ke.wRepeatCount = 1; $ke.wVirtualKeyCode = 0x1B; $ke.wVirtualScanCode = 1   # VK_ESCAPE
+      $ke.UnicodeChar = 0; $ke.dwControlKeyState = 0
+      $ke.bKeyDown = 1
+      $down = New-Object PitwallCon+INPUT_RECORD; $down.EventType = 1; $down.KeyEvent = $ke   # KEY_EVENT
+      $keUp = $ke; $keUp.bKeyDown = 0                                                          # value-type copy
+      $up = New-Object PitwallCon+INPUT_RECORD; $up.EventType = 1; $up.KeyEvent = $keUp
+      $recs = [PitwallCon+INPUT_RECORD[]]@($down, $up)
+      $written = 0
+      return [PitwallCon]::WriteConsoleInputW($h, $recs, [uint32]2, [ref]$written)
+    } finally { [PitwallCon]::CloseHandle($h) | Out-Null }
+  } finally {
+    [PitwallCon]::FreeConsole() | Out-Null
+    [PitwallCon]::AttachConsole([uint32]4294967295) | Out-Null
+  }
+}
+
 function Get-Tree([int]$root) {
   $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
   $set = New-Object System.Collections.Generic.HashSet[int]
@@ -136,6 +179,7 @@ function Kill-Ours {
 # No fixed blind wait — we read from the start, so a fast render finishes early.
 $text = $null
 $firstReadable = $false
+$escSent = 0                           # how many interstitial-dismiss Escs we've posted
 $deadline = (Get-Date).AddSeconds($MaxWaitSec)
 Start-Sleep -Milliseconds 500          # the console host needs a beat to exist at all
 while ((Get-Date) -lt $deadline) {
@@ -147,6 +191,16 @@ while ((Get-Date) -lt $deadline) {
       # require BOTH a percent AND a Resets line: the panel draws fast enough that a
       # 500ms poll could otherwise catch a frame with the % but not yet the reset row.
       if ($t -match '%\s*used' -and $t -match 'Resets') { $text = $t; break }
+      # Otherwise: if the "Claude in Chrome extension detected" first-run prompt (new
+      # 2026-06) is sitting in FRONT of /usage, it blocks the panel forever in a hidden,
+      # no-stdin spawn. Esc past it ("Esc to keep browser tools off" is the prompt's own
+      # decline action) so the panel can draw. Match its EXACT wording only - a broad
+      # "any prompt" match would also hit the usage panel's own mid-render frame (its tab
+      # bar / "Esc to" footer) and Esc would navigate OUT of the panel. Capped so a
+      # never-clearing screen can't spin. Esc-only - see Send-ConsoleEsc for why it's safe.
+      elseif ($escSent -lt 5 -and ($t -match 'Chrome extension detected' -or $t -match 'keep browser tools off')) {
+        if (Send-ConsoleEsc $tp) { $escSent++; Trace "sent Esc to clear Chrome interstitial ($escSent)" }
+      }
     }
   }
   if ($text) { break }
