@@ -1091,6 +1091,12 @@ def checkpoint_index(pitstop_dir=PITSTOP_DIR):
     if not os.path.isdir(pitstop_dir):
         return {}
     for f in glob.glob(os.path.join(pitstop_dir, "resume_*.txt")):
+        # Skip pitstop_handoff's per-nonce resume SNAPSHOTS (resume_<track>_<16hex>.txt,
+        # added 2026-06-27): they're transient copies of the per-track resume_<track>.txt, so
+        # the per-track file already supplies the recap and the snapshot would only duplicate
+        # the same key. Excluding them keeps this index keyed to real checkpoints.
+        if re.match(r"^resume_.+_[0-9a-f]{16}\.txt$", os.path.basename(f)):
+            continue
         try:
             with open(f, encoding="utf-8", errors="replace") as fh:
                 first = next((ln for ln in fh if ln.strip()), "")
