@@ -20,7 +20,8 @@ param(
   [string]$WorkDir   = "",
   [int]$MaxWaitSec   = 18,      # give the live /usage call time to render
   [switch]$RawOnly,            # print just the captured panel text (no JSON) - for the troubleshooting view
-  [switch]$Trace              # emit per-step timing (hop + cumulative ms) to stderr
+  [switch]$Trace,             # emit per-step timing (hop + cumulative ms) to stderr
+  [switch]$DefineOnly        # define functions then return WITHOUT spawning - for tests only
 )
 $ErrorActionPreference = 'Stop'
 function Fail([string]$m){ [Console]::Out.WriteLine((@{ok=$false;error=$m}|ConvertTo-Json -Compress)); exit 0 }
@@ -152,27 +153,71 @@ function Send-ConsoleEsc([int]$targetPid) {
   }
 }
 
-function Get-Tree([int]$root) {
-  $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
-  $set = New-Object System.Collections.Generic.HashSet[int]
-  [void]$set.Add($root)
-  for ($i=0; $i -lt 6; $i++) {
+# Pure tree-builder (testable; no WMI call inside). Returns a hashtable {pid -> CreationDate}
+# of $root plus its GENUINE descendants. Two guards defeat Windows pid-recycling, the cause
+# of the 2026-06-27 "sync killed all CLIs" bug: Windows does NOT rewrite an orphaned
+# process's recorded ParentProcessId when its parent exits, so a fresh spawn handed a
+# recycled pid would otherwise adopt unrelated live sessions as its own children:
+#   * created-after-spawn: a descendant must be created at/after $since (our spawn instant)
+#     — excludes any PRE-EXISTING orphan (the observed bug, a depth-1 stale-parent match).
+#   * monotonic edge: a child must be created at/after the CURRENT occupant of its parent
+#     pid. A real child is always younger than its parent; an impostor whose parent edge is
+#     stale is OLDER than that pid's current occupant, so it's rejected — this also closes
+#     the depth>=2 within-window recycle. (Ivan HIGH safety invariant, MEDIUM-1/2.)
+# Neither guard can drop a real child (a genuine descendant is always created after both the
+# spawn and its own parent), so it only ever shrinks the kill set toward exactly-our-tree.
+function Build-Tree($all, [int]$root, [datetime]$since) {
+  if ($since -isnot [datetime]) { throw "Build-Tree: `$since must be [datetime]" }
+  $own = @{}                                       # pid -> CreationDate we adopted it with
+  foreach ($p in $all) {
+    if ([int]$p.ProcessId -eq $root -and $p.CreationDate -is [datetime]) { $own[$root] = $p.CreationDate } }
+  if (-not $own.ContainsKey($root)) { $own[$root] = $since }   # root already gone: anchor at spawn
+  for ($i=0; $i -lt 8; $i++) {
     $add = $false
     foreach ($p in $all) {
-      if ($set.Contains([int]$p.ParentProcessId) -and -not $set.Contains([int]$p.ProcessId)) { [void]$set.Add([int]$p.ProcessId); $add=$true } }
+      $cpid = [int]$p.ProcessId; $ppid = [int]$p.ParentProcessId
+      if ($own.ContainsKey($ppid) -and -not $own.ContainsKey($cpid) -and $p.CreationDate -is [datetime] `
+          -and $p.CreationDate -ge $since -and $p.CreationDate -ge $own[$ppid]) {
+        $own[$cpid] = $p.CreationDate; $add = $true } }
     if (-not $add) { break }
   }
-  $set
+  $own
+}
+function Get-Tree([int]$root) {
+  $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate
+  Build-Tree $all $root $script:spawnStart
 }
 
+# Tests dot-source this file to exercise Build-Tree without spawning anything.
+if ($DefineOnly) { return }
+
 if(-not (Test-Path $ClaudeExe)){ Fail "claude.exe not found at $ClaudeExe" }
+# Stamp the instant BEFORE the spawn: every genuine descendant is created after this, so
+# it's the cutoff that fences out recycled-pid impostors in both Build-Tree and Kill-Ours.
+$script:spawnStart = Get-Date
 $proc = Start-Process -FilePath $ClaudeExe -ArgumentList '/usage' -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
-$ourTree = New-Object System.Collections.Generic.HashSet[int]; [void]$ourTree.Add([int]$proc.Id)
+$ourTree = @{}                                  # pid -> CreationDate we adopted it with
 Trace "spawned claude /usage (pid $($proc.Id))"
 
+function Merge-Tree($h) { foreach($k in $h.Keys){ $ourTree[$k] = $h[$k] } }
+
 function Kill-Ours {
-  try { foreach($k in @(Get-Tree ([int]$proc.Id))){ [void]$ourTree.Add($k) } } catch {}
-  foreach($k in @($ourTree)){ try { Stop-Process -Id $k -Force -ErrorAction Stop } catch {} }
+  try { Merge-Tree (Get-Tree ([int]$proc.Id)) } catch {}
+  foreach($k in @($ourTree.Keys)){
+    try {
+      # Kill-site identity = (pid, CreationDate). A pid we adopted could have died and been
+      # recycled to an UNRELATED process since we saw it; kill ONLY if the live occupant's
+      # CreationDate still EQUALS what we adopted it with. A recycle yields a new process =>
+      # different creation time => skipped; a genuine survivor matches exactly. CreationDate
+      # is a fixed per-process property, so the same process always compares equal across
+      # reads. This closes the kill-site recycle race even if a stale pid is in the set.
+      # (Ivan HIGH safety invariant, MEDIUM-1.)
+      $lp = Get-CimInstance Win32_Process -Filter "ProcessId=$k" -ErrorAction SilentlyContinue
+      if ($lp -and $lp.CreationDate -is [datetime] -and $lp.CreationDate -eq $ourTree[$k]) {
+        Stop-Process -Id $k -Force -ErrorAction Stop
+      }
+    } catch {}
+  }
 }
 
 # poll the console buffer until the panel shows "% used" (the live call has rendered).
@@ -183,8 +228,8 @@ $escSent = 0                           # how many interstitial-dismiss Escs we'v
 $deadline = (Get-Date).AddSeconds($MaxWaitSec)
 Start-Sleep -Milliseconds 500          # the console host needs a beat to exist at all
 while ((Get-Date) -lt $deadline) {
-  $tree = Get-Tree ([int]$proc.Id); foreach($k in $tree){ [void]$ourTree.Add($k) }
-  foreach ($tp in $tree) {
+  $tree = Get-Tree ([int]$proc.Id); Merge-Tree $tree
+  foreach ($tp in $tree.Keys) {
     $t = Read-ConsoleText $tp
     if ($t) {
       if (-not $firstReadable) { $firstReadable = $true; Trace "console first readable" }
