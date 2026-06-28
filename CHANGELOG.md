@@ -6,6 +6,18 @@ All notable changes to Pitwall are documented here. The format is loosely based 
 
 ## [Unreleased]
 
+### Fixed
+- **The heat ring follows the focused CLI again (v0.9.2).** Clicking into a
+  monitored Claude CLI is supposed to switch the headline heat ring to *that*
+  session — a feature that quietly broke when Claude Code 2.1.x stopped registering
+  terminal sessions. The ring's "which session is in this window?" logic relied on a
+  learned vote that only accrues when a session is marked busy/just-worked while
+  focused; that signal disappeared, so the ring fell back to the most-recently-active
+  session instead of the one you clicked into. Fixed by resolving the focused window
+  through the hook-recorded session→window map in reverse (the same deterministic,
+  re-verified evidence the row-click window-flash already uses) before falling back to
+  the old vote/title path. Guarded by `tests/test_focus_sidmap.py`.
+
 ### Changed
 - **Session rows now show "where we left off", not the launch instruction (v0.9.1).**
   Each Claude-session row used to be labelled with the native AI session title — which

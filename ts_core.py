@@ -316,7 +316,7 @@ TERMINAL_FAIL_TIP = ("⚠  Couldn't open a window automatically. Open a terminal
 # somewhere"). ONE constant, both faces inherit it; shown quietly in Settings and stamped
 # into the packaged build by the release pipeline. 0.9.0 = feature-done, pre-packaging;
 # Johny bumps to 1.0.0 at the first packaged release, then it moves only at releases.
-APP_VERSION = "0.9.1"
+APP_VERSION = "0.9.2"
 
 # Stamped by the fact-check ritual (docs/fact_check_manifest.md): re-stamp this date each
 # time the manifest walk passes. Shown in Settings under "Rotating tips" (owner, 2026-06-12).
@@ -2344,8 +2344,27 @@ class FocusTracker:
         for sid in [x for x in votes if x not in live]:
             del votes[sid]
 
+    def _sidmap_sid(self, hwnd, sessions):
+        """Deterministic reverse of the hook-recorded session→window map: the OPEN
+        session whose re-verified sidmap window IS this focused terminal, or None.
+        This is the SAME evidence window_evidence trusts first (a record written from
+        inside the session's own process tree, re-verified against the live window),
+        used here in reverse. It needs no busy/activity learning — which is why it
+        keeps working after Claude Code 2.1.x stopped registering terminals and the
+        vote signals dried up. Sessions without a map file (other machines, public
+        users) simply don't match and fall through to the vote/title path below."""
+        if not hwnd:
+            return None
+        for s in sessions:
+            if s.get("open") and not s.get("bg") and _sidmap_window(s["sid"]) == hwnd:
+                return s["sid"]
+        return None
+
     def _resolve(self, hwnd, sessions):
         by_sid = {s["sid"]: s for s in sessions}
+        sid = self._sidmap_sid(hwnd, sessions)   # deterministic hook map, in reverse
+        if sid:
+            return sid
         votes = self.bind.get(hwnd)
         if votes:
             sid = max(votes, key=votes.get)
